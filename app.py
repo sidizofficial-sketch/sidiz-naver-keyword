@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import base64
 import requests
+import google.generativeai as genai
 import plotly.express as px
 from datetime import datetime
 
