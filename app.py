@@ -168,5 +168,5 @@ if all_results:
         
         st.dataframe(df_detail, use_container_width=True)
 
-    else:
+   else:
         st.warning("조회된 데이터가 없습니다. 키워드 선택이나 API 설정을 확인해주세요.")
