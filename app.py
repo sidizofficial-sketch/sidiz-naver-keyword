@@ -207,3 +207,20 @@ if st.button("📈 월별 데이터 분석 시작"):
         ).reset_index()
         
         st.dataframe(df_detail, use_container_width=True)
+
+st.divider()
+st.subheader("🤖 AI 데이터 인사이트 챗봇")
+
+if not df_res.empty:
+    # AI에게 전달할 데이터 요약본 생성
+    data_summary = df_res.groupby(['년월', '비교대상'])['검색량'].sum().to_string()
+    
+    # 챗봇 입력창
+    user_question = st.text_input("데이터에 대해 궁금한 점을 물어보세요! (예: 어떤 그룹의 비중이 가장 큰가요?)")
+    
+    if user_question:
+        with st.spinner("AI가 데이터를 분석 중입니다..."):
+            # 여기에 AI API 호출 함수 연결
+            # response = call_ai_api(user_question, data_summary)
+            # st.write(response)
+            st.info("여기에 AI의 분석 답변이 출력됩니다.")
