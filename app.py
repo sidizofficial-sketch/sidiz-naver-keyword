@@ -27,38 +27,88 @@ def get_naver_search_vol(keyword, api_key, secret_key, customer_id):
         'X-Customer': customer_id,
         'X-Signature': signature
     }
-    
     params = {'hintKeywords': keyword, 'showDetail': '1'}
     
     try:
         response = requests.get(BASE_URL + uri, params=params, headers=headers)
         data = response.json()
-        
         if 'keywordList' in data and len(data['keywordList']) > 0:
             target = data['keywordList'][0]
-            # '< 10' 같은 문자열 처리
             pc_val = str(target['monthlyPcQcCnt']).replace('< ', '')
             mo_val = str(target['monthlyMobileQcCnt']).replace('< ', '')
-            
             return {
                 "pc": int(pc_val) if pc_val.isdigit() else 10,
                 "mobile": int(mo_val) if mo_val.isdigit() else 10
             }
-    except Exception as e:
-        pass # 에러 발생 시 아래 기본값 반환
-        
+    except:
+        pass
     return {"pc": 0, "mobile": 0}
 
 # --- 2. 데이터 로딩 (구글 시트) ---
 @st.cache_data
 def load_data_from_gsheets(sheet_id):
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-    df = pd.read_csv(url)
-    return df
+    return pd.read_csv(url)
 
-# --- 3. UI 구성 ---
+# --- 3. UI 구성 및 Secrets 적용 ---
 st.set_page_config(page_title="의자 키워드 비교 분석기", layout="wide")
 
+# Secrets에서 키값 불러오기 (매번 입력할 필요 없음)
+try:
+    api_key = st.secrets["NAVER_API_KEY"]
+    secret_key = st.secrets["NAVER_SECRET_KEY"]
+    customer_id = st.secrets["NAVER_CUSTOMER_ID"]
+except KeyError:
+    st.error("Streamlit Secrets 설정이 필요합니다. NAVER_API_KEY, NAVER_SECRET_KEY, NAVER_CUSTOMER_ID를 설정해주세요.")
+    st.stop()
+
 with st.sidebar:
-    st.header("🔑 API 및 데이터 설정")
-    # 팁: 매번 입력하기 귀찮다면 value="내키값"을
+    st.header("⚙️ 데이터 설정")
+    # 시트 ID는 공개되어도 상관없으므로 기본값으로 설정
+    sheet_id = st.text_input("Google Sheet ID", value="1JnEKEe7HDbN5NG8l0kZ55Rtihp9SBbauD0CzhKQX-qM")
+
+# 시트 데이터 불러오기
+try:
+    master_df = load_data_from_gsheets(sheet_id)
+except:
+    st.error("구글 시트를 불러올 수 없습니다. 시트 ID와 공유 설정을 확인해주세요.")
+    st.stop()
+
+st.title("💺 의자 키워드 그룹별 비교 대시보드")
+
+# --- 비교 필터 섹션 ---
+st.subheader("🛠️ 비교 그룹 설정 (최대 10개)")
+num_groups = st.slider("비교할 그룹 개수", 1, 10, 2)
+
+cols = st.columns(min(num_groups, 3)) 
+filter_configs = {}
+
+for i in range(num_groups):
+    with cols[i % 3]:
+        with st.expander(f"비교 대상 {i+1}", expanded=True):
+            group_label = st.text_input(f"그룹 이름 {i+1}", f"대상 {i+1}", key=f"label_{i}")
+            selected_groups = st.multiselect(f"포함할 그룹(GROUP)", options=sorted(master_df['GROUP'].unique().tolist()), key=f"gr_{i}")
+            available_kws = master_df[master_df['GROUP'].isin(selected_groups)]['KEYWORD'].tolist()
+            selected_kws = st.multiselect(f"세부 키워드 선택", options=sorted(available_kws), default=available_kws, key=f"kw_{i}")
+            filter_configs[group_label] = selected_kws
+
+# --- 분석 실행 ---
+if st.button("📈 데이터 분석 및 차트 생성"):
+    all_plot_data = []
+    with st.spinner("네이버 API에서 실시간 데이터를 조회 중입니다..."):
+        progress_bar = st.progress(0)
+        for idx, (label, kws) in enumerate(filter_configs.items()):
+            if not kws: continue
+            for kw in kws:
+                vol_data = get_naver_search_vol(kw, api_key, secret_key, customer_id)
+                all_plot_data.append({"비교대상": label, "키워드": kw, "검색량": vol_data["pc"] + vol_data["mobile"]})
+            progress_bar.progress((idx + 1) / len(filter_configs))
+
+    if all_plot_data:
+        res_df = pd.DataFrame(all_plot_data)
+        fig = px.bar(res_df, x="검색량", y="비교대상", color="키워드", orientation='h', title="그룹별 키워드 비중 비교", text_auto='.2s', color_discrete_sequence=px.colors.qualitative.Pastel)
+        fig.update_layout(barmode='stack', yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(res_df)
+    else:
+        st.error("선택된 키워드가 없습니다.")
