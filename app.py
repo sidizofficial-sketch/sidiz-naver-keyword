@@ -6,143 +6,130 @@ import hmac
 import base64
 import requests
 import plotly.express as px
+from datetime import datetime
 
-# --- 1. 네이버 API 인증 설정 ---
+# --- 1. 네이버 API 인증 및 데이터 호출 함수 ---
 def generate_signature(timestamp, method, uri, secret_key):
     message = f"{timestamp}.{method}.{uri}"
     hash = hmac.new(bytes(secret_key, "utf-8"), bytes(message, "utf-8"), hashlib.sha256)
     return base64.b64encode(hash.digest()).decode()
 
+# 검색광고 API (최근 30일 검색량 합계용)
 def get_naver_search_vol(keyword, api_key, secret_key, customer_id):
     BASE_URL = 'https://api.searchad.naver.com'
     uri = '/keywordstool'
     method = 'GET'
     timestamp = str(round(time.time() * 1000))
     signature = generate_signature(timestamp, method, uri, secret_key)
-    
-    headers = {
-        'Content-Type': 'application/json; charset=UTF-8',
-        'X-Timestamp': timestamp,
-        'X-API-KEY': api_key,
-        'X-Customer': customer_id,
-        'X-Signature': signature
-    }
+    headers = {'X-Timestamp': timestamp, 'X-API-KEY': api_key, 'X-Customer': customer_id, 'X-Signature': signature}
     params = {'hintKeywords': keyword, 'showDetail': '1'}
-    
     try:
-        response = requests.get(BASE_URL + uri, params=params, headers=headers)
-        data = response.json()
-        if 'keywordList' in data and len(data['keywordList']) > 0:
-            target = data['keywordList'][0]
-            pc_val = str(target['monthlyPcQcCnt']).replace('< ', '')
-            mo_val = str(target['monthlyMobileQcCnt']).replace('< ', '')
-            return {
-                "pc": int(pc_val) if pc_val.isdigit() else 10,
-                "mobile": int(mo_val) if mo_val.isdigit() else 10
-            }
-    except:
-        pass
-    return {"pc": 0, "mobile": 0}
+        res = requests.get(BASE_URL + uri, params=params, headers=headers).json()
+        if 'keywordList' in res:
+            target = res['keywordList'][0]
+            pc = str(target['monthlyPcQcCnt']).replace('< ', '10')
+            mo = str(target['monthlyMobileQcCnt']).replace('< ', '10')
+            return int(pc) + int(mo)
+    except: pass
+    return 0
 
-# --- 2. 데이터 로딩 (구글 시트) ---
+# 데이터랩 API (월별 트렌드 비중 계산용)
+def get_datalab_trend(keyword, client_id, client_secret, start_date, end_date):
+    url = "https://openapi.naver.com/v1/datalab/search"
+    headers = {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret, "Content-Type": "application/json"}
+    body = {
+        "startDate": start_date.strftime("%Y-%m-%d"),
+        "endDate": end_date.strftime("%Y-%m-%d"),
+        "timeUnit": "month",
+        "keywordGroups": [{"groupName": keyword, "keywords": [keyword]}]
+    }
+    try:
+        res = requests.post(url, headers=headers, json=body).json()
+        if 'results' in res:
+            data = res['results'][0]['data']
+            return {d['period'][:7]: d['ratio'] for d in data} # {'2024-12': 100.0, ...}
+    except: pass
+    return {}
+
+# --- 2. 데이터 로딩 ---
 @st.cache_data
 def load_data_from_gsheets(sheet_id):
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-    return pd.read_csv(url)
+    df = pd.read_csv(url)
+    df.columns = [c.strip().upper() for c in df.columns]
+    return df
 
-# --- 3. UI 구성 및 Secrets 적용 ---
-st.set_page_config(page_title="의자 키워드 비교 분석기", layout="wide")
+# --- 3. UI 및 설정 ---
+st.set_page_config(page_title="의자 월별 키워드 분석기", layout="wide")
 
-# Secrets에서 키값 불러오기 (매번 입력할 필요 없음)
+# Secrets 설정 확인 (데이터랩 키 추가 필요)
 try:
-    api_key = st.secrets["NAVER_API_KEY"]
-    secret_key = st.secrets["NAVER_SECRET_KEY"]
-    customer_id = st.secrets["NAVER_CUSTOMER_ID"]
-except KeyError:
-    st.error("Streamlit Secrets 설정이 필요합니다. NAVER_API_KEY, NAVER_SECRET_KEY, NAVER_CUSTOMER_ID를 설정해주세요.")
+    NAVER_KEYS = {
+        "api": st.secrets["NAVER_API_KEY"],
+        "sec": st.secrets["NAVER_SECRET_KEY"],
+        "cust": st.secrets["NAVER_CUSTOMER_ID"],
+        "client_id": st.secrets.get("NAVER_CLIENT_ID", ""), # 데이터랩용
+        "client_secret": st.secrets.get("NAVER_CLIENT_SECRET", "") # 데이터랩용
+    }
+except:
+    st.error("Secrets 설정에 NAVER API 키들을 등록해주세요.")
     st.stop()
 
 with st.sidebar:
-    st.header("⚙️ 데이터 설정")
+    st.header("⚙️ 설정")
     sheet_id = st.text_input("Google Sheet ID", value="1JnEKEe7HDbN5NG8l0kZ55Rtihp9SBbauD0CzhKQX-qM")
-    
-    # 📅 기간 설정 추가
     st.markdown("---")
     st.subheader("📅 분석 기간 설정")
-    start_date = st.date_input("시작일", pd.to_datetime("2025-01-01"))
-    end_date = st.date_input("종료일", pd.to_datetime("today"))
+    s_date = st.date_input("시작일", datetime(2024, 12, 1))
+    e_date = st.date_input("종료일", datetime(2025, 1, 31))
 
-# 시트 데이터 불러오기
-try:
-    master_df = load_data_from_gsheets(sheet_id)
-except:
-    st.error("구글 시트를 불러올 수 없습니다. 시트 ID와 공유 설정을 확인해주세요.")
-    st.stop()
+master_df = load_data_from_gsheets(sheet_id)
+st.title("💺 월별 키워드 그룹 비중 대시보드")
 
-st.title("💺 의자 키워드 그룹별 비교 대시보드")
-
-# --- 비교 필터 섹션 (여러 개 선택 가능하도록 최적화) ---
-st.subheader("🛠️ 비교 그룹 설정 (최대 10개)")
-num_groups = st.slider("비교할 그룹 개수", 1, 10, 2)
-
-cols = st.columns(min(num_groups, 3)) 
+# --- 비교 그룹 설정 ---
+num_groups = st.slider("비교 그룹 수", 1, 5, 2)
+cols = st.columns(num_groups)
 filter_configs = {}
 
-# 여기서부터가 새로 바뀐 for문입니다.
 for i in range(num_groups):
-    with cols[i % 3]:
+    with cols[i]:
         with st.expander(f"비교 대상 {i+1}", expanded=True):
-            group_label = st.text_input(f"그룹 이름 {i+1}", f"대상 {i+1}", key=f"label_{i}")
-            
-            # 1. 브랜드(GROUP) 선택
-            all_groups = sorted(master_df['GROUP'].unique().tolist())
-            selected_groups = st.multiselect(
-                f"브랜드 선택", 
-                options=all_groups, 
-                key=f"gr_{i}"
-            )
-            
-            if selected_groups:
-                # 선택된 브랜드의 키워드 추출
-                available_kws = sorted(master_df[master_df['GROUP'].isin(selected_groups)]['KEYWORD'].unique().tolist())
-                
-                # 💡 전체 선택 체크박스 추가
-                select_all = st.checkbox(f"모든 키워드 자동 선택", key=f"all_{i}", value=True)
-                
-                # 체크박스 상태에 따라 기본 선택값 결정
-                default_selection = available_kws if select_all else []
+            label = st.text_input(f"대상 이름", f"그룹 {i+1}", key=f"l_{i}")
+            grs = st.multiselect(f"브랜드", options=sorted(master_df['GROUP'].unique()), key=f"g_{i}")
+            if grs:
+                kws = sorted(master_df[master_df['GROUP'].isin(grs)]['KEYWORD'].unique())
+                sel_all = st.checkbox("전체 선택", value=True, key=f"all_{i}")
+                sel_kws = st.multiselect("키워드", options=kws, default=kws if sel_all else [], key=f"kw_{i}")
+                filter_configs[label] = sel_kws
 
-                # 2. 세부 키워드 다중 선택 드롭다운
-                selected_kws = st.multiselect(
-                    f"세부 키워드 (검색 가능)", 
-                    options=available_kws, 
-                    default=default_selection, 
-                    key=f"kw_{i}"
-                )
-                
-                st.caption(f"✅ {len(selected_kws)}개 키워드 선택됨")
-                filter_configs[group_label] = selected_kws
-            else:
-                st.info("먼저 브랜드를 선택해주세요.")
-
-# --- 이후 분석 실행 버튼 코드 (if st.button...) 가 이어집니다.
 # --- 분석 실행 ---
-if st.button("📈 데이터 분석 및 차트 생성"):
-    all_plot_data = []
-    with st.spinner("네이버 API에서 실시간 데이터를 조회 중입니다..."):
-        progress_bar = st.progress(0)
-        for idx, (label, kws) in enumerate(filter_configs.items()):
-            if not kws: continue
-            for kw in kws:
-                vol_data = get_naver_search_vol(kw, api_key, secret_key, customer_id)
-                all_plot_data.append({"비교대상": label, "키워드": kw, "검색량": vol_data["pc"] + vol_data["mobile"]})
-            progress_bar.progress((idx + 1) / len(filter_configs))
+if st.button("📈 월별 데이터 분석 시작"):
+    all_results = []
+    with st.spinner("월별 트렌드를 계산 중입니다..."):
+        for label, keywords in filter_configs.items():
+            for kw in keywords:
+                # 1. 광고 API로 최근 볼륨 획득
+                total_vol = get_naver_search_vol(kw, NAVER_KEYS["api"], NAVER_KEYS["sec"], NAVER_KEYS["cust"])
+                # 2. 데이터랩 API로 월별 비중 획득
+                trends = get_datalab_trend(kw, NAVER_KEYS["client_id"], NAVER_KEYS["client_secret"], s_date, e_date)
+                
+                # 3. 비중에 맞춰 월별 검색량 배분
+                if trends:
+                    total_ratio = sum(trends.values())
+                    for month, ratio in trends.items():
+                        monthly_vol = int((ratio / total_ratio) * total_vol) if total_ratio > 0 else 0
+                        all_results.append({"비교대상": label, "년월": month, "키워드": kw, "검색량": monthly_vol})
 
-    if all_plot_data:
-        res_df = pd.DataFrame(all_plot_data)
-        fig = px.bar(res_df, x="검색량", y="비교대상", color="키워드", orientation='h', title="그룹별 키워드 비중 비교", text_auto='.2s', color_discrete_sequence=px.colors.qualitative.Pastel)
-        fig.update_layout(barmode='stack', yaxis={'categoryorder':'total ascending'})
+    if all_results:
+        df_res = pd.DataFrame(all_results)
+        
+        # 그래프: y축에 '비교대상'과 '년월'을 계층적으로 표시
+        fig = px.bar(df_res, x="검색량", y="년월", color="키워드", facet_row="비교대상",
+                     orientation='h', title="월별 그룹 키워드 비중 비교",
+                     text_auto='.2s', height=300 * num_groups)
+        fig.update_yaxes(matches=None)
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(res_df)
-    else:
-        st.error("선택된 키워드가 없습니다.")
+        
+        # 하단 상세 테이블
+        st.subheader("📋 월별 상세 검색량 데이터")
+        st.dataframe(df_res.sort_values(["비교대상", "년월", "검색량"], ascending=[True, True, False]))
