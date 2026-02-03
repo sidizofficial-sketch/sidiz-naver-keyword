@@ -120,47 +120,53 @@ if st.button("📈 월별 데이터 분석 시작"):
                         monthly_vol = int((ratio / total_ratio) * total_vol) if total_ratio > 0 else 0
                         all_results.append({"비교대상": label, "년월": month, "키워드": kw, "검색량": monthly_vol})
 
-    if all_results:
+if all_results:
         df_res = pd.DataFrame(all_results)
         
-        # 💡 핵심 수정: '비교대상'과 '키워드'를 합쳐서 범례(Color)에 표시합니다.
-        # 이렇게 하면 Y축은 '년월' 하나로 통합되고, 막대 안에서 그룹별 비중이 보입니다.
-        df_res["구분"] = df_res["비교대상"] + ": " + df_res["키워드"]
+        # 1. 시각화를 위해 데이터 그룹화 (년월, 비교대상별로 합산)
+        # 키워드별로 너무 잘게 쪼개지면 비중 비교가 어려우므로 그룹 단위로 합칩니다.
+        df_monthly_group = df_res.groupby(["년월", "비교대상"])["검색량"].sum().reset_index()
 
-        # 그래프 생성
-        fig = px.bar(
-            df_res, 
+        # 2. 그래프 생성
+        # Y축은 '년월', X축은 '검색량', 색상은 '비교대상(그룹1, 2)'
+        fig_main = px.bar(
+            df_monthly_group, 
             x="검색량", 
             y="년월", 
-            color="구분",              # 그룹명과 키워드가 같이 표시됨
+            color="비교대상", 
             orientation='h', 
-            title="월별 그룹 통합 키워드 비중 비교",
+            title="월별 그룹 통합 검색량 비중 비교",
             text_auto='.2s', 
-            height=600,               # 높이는 고정해서 보기 편하게 조정
-            barmode='stack'           # 누적 막대 형식
+            height=500,
+            barmode='stack', # 그룹1과 그룹2가 한 막대에 쌓임
+            color_discrete_sequence=px.colors.qualitative.Pastel # 부드러운 색상 적용
         )
 
-        # Y축 내림차순 정렬 (최신달이 위로 오게)
-        fig.update_yaxis(categoryorder='category descending')
-        
-        # 레이아웃 깔끔하게 정리
-        fig.update_layout(
-            legend_title="그룹별 키워드",
+        # 3. Y축 정렬 및 레이아웃 설정 (AttributeError 방지 위해 fig_main 사용)
+        fig_main.update_yaxes(categoryorder='category descending')
+        fig_main.update_layout(
+            legend_title="비교 그룹",
             xaxis_title="총 검색량 합계",
-            yaxis_title="조회 월"
+            yaxis_title="조회 월 (Month)",
+            margin=dict(l=20, r=20, t=50, b=20)
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig_main, use_container_width=True)
         
-        # 하단 데이터 테이블 (년월별로 그룹화해서 보기)
-        st.subheader("📋 월별 상세 수치")
-        pivot_df = df_res.pivot_table(
-            index=["년월", "비교대상"], 
+        # --- 4. 하단 상세 테이블 (요청하신 월 단위 설정) ---
+        st.markdown("---")
+        st.subheader("📋 월별/키워드별 상세 검색량")
+        
+        # 데이터를 보기 좋게 피벗 (행: 키워드, 열: 년월)
+        df_detail = df_res.pivot_table(
+            index=["비교대상", "키워드"], 
+            columns="년월", 
             values="검색량", 
-            aggfunc="sum"
+            aggfunc="sum",
+            fill_value=0
         ).reset_index()
-        st.dataframe(pivot_df)
         
-        # 하단 상세 테이블
-        st.subheader("📋 월별 상세 검색량 데이터")
-        st.dataframe(df_res.sort_values(["비교대상", "년월", "검색량"], ascending=[True, True, False]))
+        st.dataframe(df_detail, use_container_width=True)
+
+    else:
+        st.warning("조회된 데이터가 없습니다. 키워드 선택이나 API 설정을 확인해주세요.")
