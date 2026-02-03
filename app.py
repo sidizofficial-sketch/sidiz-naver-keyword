@@ -123,12 +123,43 @@ if st.button("📈 월별 데이터 분석 시작"):
     if all_results:
         df_res = pd.DataFrame(all_results)
         
-        # 그래프: y축에 '비교대상'과 '년월'을 계층적으로 표시
-        fig = px.bar(df_res, x="검색량", y="년월", color="키워드", facet_row="비교대상",
-                     orientation='h', title="월별 그룹 키워드 비중 비교",
-                     text_auto='.2s', height=300 * num_groups)
-        fig.update_yaxes(matches=None)
+        # 💡 핵심 수정: '비교대상'과 '키워드'를 합쳐서 범례(Color)에 표시합니다.
+        # 이렇게 하면 Y축은 '년월' 하나로 통합되고, 막대 안에서 그룹별 비중이 보입니다.
+        df_res["구분"] = df_res["비교대상"] + ": " + df_res["키워드"]
+
+        # 그래프 생성
+        fig = px.bar(
+            df_res, 
+            x="검색량", 
+            y="년월", 
+            color="구분",              # 그룹명과 키워드가 같이 표시됨
+            orientation='h', 
+            title="월별 그룹 통합 키워드 비중 비교",
+            text_auto='.2s', 
+            height=600,               # 높이는 고정해서 보기 편하게 조정
+            barmode='stack'           # 누적 막대 형식
+        )
+
+        # Y축 내림차순 정렬 (최신달이 위로 오게)
+        fig.update_yaxis(categoryorder='category descending')
+        
+        # 레이아웃 깔끔하게 정리
+        fig.update_layout(
+            legend_title="그룹별 키워드",
+            xaxis_title="총 검색량 합계",
+            yaxis_title="조회 월"
+        )
+
         st.plotly_chart(fig, use_container_width=True)
+        
+        # 하단 데이터 테이블 (년월별로 그룹화해서 보기)
+        st.subheader("📋 월별 상세 수치")
+        pivot_df = df_res.pivot_table(
+            index=["년월", "비교대상"], 
+            values="검색량", 
+            aggfunc="sum"
+        ).reset_index()
+        st.dataframe(pivot_df)
         
         # 하단 상세 테이블
         st.subheader("📋 월별 상세 검색량 데이터")
