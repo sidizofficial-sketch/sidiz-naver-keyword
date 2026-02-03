@@ -136,43 +136,52 @@ if st.button("📈 월별 데이터 분석 시작"):
                     # 트렌드 데이터가 없을 경우 0으로 처리하거나 생략
                     pass
 
-    # 결과 출력
-    if all_results:
+if all_results:
         df_res = pd.DataFrame(all_results)
         
-        # 그룹별/월별 합계 계산 (막대 그래프용)
-        df_monthly_group = df_res.groupby(["년월", "비교대상"])["검색량"].sum().reset_index()
+        # 1. 막대 내부 라벨용: 개별 키워드 비중 계산
+        df_res['월별총합'] = df_res.groupby('년월')['검색량'].transform('sum')
+        df_res['비중'] = (df_res['검색량'] / df_res['월별총합'] * 100).round(1)
+        # 라벨 텍스트 생성 (예: 1.2k (45.2%))
+        df_res['라벨'] = df_res.apply(lambda x: f"{x['검색량']:,} ({x['비중']}%)", axis=1)
 
-        # 시각화 (Y축: 년월, X축: 검색량, 색상: 비교대상)
+        # 2. 막대 끝 합계용: 그룹별 합계 계산
+        df_total = df_res.groupby(['년월', '비교대상'])['검색량'].sum().reset_index()
+
+        # 3. 그래프 생성
         fig_main = px.bar(
-            df_monthly_group, 
+            df_res, 
             x="검색량", 
             y="년월", 
             color="비교대상", 
-            orientation='h', 
-            title="월별 그룹 통합 검색량 비중 비교",
-            text_auto='.2s', 
-            height=500, 
+            orientation='h',
+            title="월별 그룹 통합 검색량 및 비중 비교",
+            text="라벨",        # 막대 안에 검색량 + 비중 표시
+            height=600,
             barmode='stack',
             color_discrete_sequence=px.colors.qualitative.Pastel
         )
-        
-        # 최신 달이 위로 오도록 정렬
+
+        # 4. 막대 끝에 전체 합계 추가 (Annotations 활용)
+        for i, row in df_total.iterrows():
+            fig_main.add_annotation(
+                x=row['검색량'], 
+                y=row['년월'],
+                text=f"  합계: {row['검색량']:,}", # 막대 끝 합계 표시
+                showarrow=False,
+                xanchor='left',
+                font=dict(size=12, color="black", family="Arial Black")
+            )
+
+        # 레이아웃 디테일 조정
+        fig_main.update_traces(textposition='inside', texttemplate='%{text}')
         fig_main.update_yaxes(categoryorder='category descending')
-        
+        fig_main.update_layout(
+            uniformtext_minsize=8, 
+            uniformtext_mode='hide',
+            legend_title="비교 그룹",
+            xaxis_title="검색량 합계",
+            margin=dict(r=100) # 합계 텍스트가 잘리지 않도록 오른쪽 여백 확보
+        )
+
         st.plotly_chart(fig_main, use_container_width=True)
-        
-        # 상세 데이터 테이블
-        st.markdown("---")
-        st.subheader("📋 월별 상세 검색량 데이터")
-        df_detail = df_res.pivot_table(
-            index=["비교대상", "키워드"], 
-            columns="년월", 
-            values="검색량", 
-            aggfunc="sum", 
-            fill_value=0
-        ).reset_index()
-        
-        st.dataframe(df_detail, use_container_width=True)
-    else:
-        st.warning("데이터를 불러오지 못했습니다. 키워드 선택 및 API 설정을 다시 확인해주세요.")
