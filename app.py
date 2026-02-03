@@ -102,33 +102,48 @@ for i in range(num_groups):
                 sel_kws = st.multiselect("키워드", options=kws, default=kws if sel_all else [], key=f"kw_{i}")
                 filter_configs[label] = sel_kws
 
-# --- 분석 실행 ---
+# --- 4. 분석 실행 섹션 ---
+
+# 변수 초기화 (에러 방지용)
+all_results = []
+
 if st.button("📈 월별 데이터 분석 시작"):
-    all_results = []
-    with st.spinner("월별 트렌드를 계산 중입니다..."):
+    with st.spinner("네이버 API에서 데이터를 가져오는 중..."):
+        # filter_configs에 설정된 그룹별로 루프
         for label, keywords in filter_configs.items():
+            if not keywords: continue
+            
             for kw in keywords:
-                # 1. 광고 API로 최근 볼륨 획득
+                # 1. 검색광고 API: 전체 볼륨
                 total_vol = get_naver_search_vol(kw, NAVER_KEYS["api"], NAVER_KEYS["sec"], NAVER_KEYS["cust"])
-                # 2. 데이터랩 API로 월별 비중 획득
+                
+                # 2. 데이터랩 API: 월별 트렌드 (s_date, e_date 사용)
                 trends = get_datalab_trend(kw, NAVER_KEYS["client_id"], NAVER_KEYS["client_secret"], s_date, e_date)
                 
-                # 3. 비중에 맞춰 월별 검색량 배분
+                # 3. 비중 계산 및 데이터 저장
                 if trends:
                     total_ratio = sum(trends.values())
                     for month, ratio in trends.items():
+                        # 트렌드 비중에 맞춰 전체 검색량을 월별로 배분
                         monthly_vol = int((ratio / total_ratio) * total_vol) if total_ratio > 0 else 0
-                        all_results.append({"비교대상": label, "년월": month, "키워드": kw, "검색량": monthly_vol})
+                        all_results.append({
+                            "비교대상": label, 
+                            "년월": month, 
+                            "키워드": kw, 
+                            "검색량": monthly_vol
+                        })
+                else:
+                    # 트렌드 데이터가 없을 경우 0으로 처리하거나 생략
+                    pass
 
-if all_results:
+    # 결과 출력
+    if all_results:
         df_res = pd.DataFrame(all_results)
         
-        # 1. 시각화를 위해 데이터 그룹화 (년월, 비교대상별로 합산)
-        # 키워드별로 너무 잘게 쪼개지면 비중 비교가 어려우므로 그룹 단위로 합칩니다.
+        # 그룹별/월별 합계 계산 (막대 그래프용)
         df_monthly_group = df_res.groupby(["년월", "비교대상"])["검색량"].sum().reset_index()
 
-        # 2. 그래프 생성
-        # Y축은 '년월', X축은 '검색량', 색상은 '비교대상(그룹1, 2)'
+        # 시각화 (Y축: 년월, X축: 검색량, 색상: 비교대상)
         fig_main = px.bar(
             df_monthly_group, 
             x="검색량", 
@@ -137,36 +152,27 @@ if all_results:
             orientation='h', 
             title="월별 그룹 통합 검색량 비중 비교",
             text_auto='.2s', 
-            height=500,
-            barmode='stack', # 그룹1과 그룹2가 한 막대에 쌓임
-            color_discrete_sequence=px.colors.qualitative.Pastel # 부드러운 색상 적용
+            height=500, 
+            barmode='stack',
+            color_discrete_sequence=px.colors.qualitative.Pastel
         )
-
-        # 3. Y축 정렬 및 레이아웃 설정 (AttributeError 방지 위해 fig_main 사용)
+        
+        # 최신 달이 위로 오도록 정렬
         fig_main.update_yaxes(categoryorder='category descending')
-        fig_main.update_layout(
-            legend_title="비교 그룹",
-            xaxis_title="총 검색량 합계",
-            yaxis_title="조회 월 (Month)",
-            margin=dict(l=20, r=20, t=50, b=20)
-        )
-
+        
         st.plotly_chart(fig_main, use_container_width=True)
         
-        # --- 4. 하단 상세 테이블 (요청하신 월 단위 설정) ---
+        # 상세 데이터 테이블
         st.markdown("---")
-        st.subheader("📋 월별/키워드별 상세 검색량")
-        
-        # 데이터를 보기 좋게 피벗 (행: 키워드, 열: 년월)
+        st.subheader("📋 월별 상세 검색량 데이터")
         df_detail = df_res.pivot_table(
             index=["비교대상", "키워드"], 
             columns="년월", 
             values="검색량", 
-            aggfunc="sum",
+            aggfunc="sum", 
             fill_value=0
         ).reset_index()
         
         st.dataframe(df_detail, use_container_width=True)
-
-else:
-        st.warning("조회된 데이터가 없습니다. 키워드 선택이나 API 설정을 확인해주세요.")
+    else:
+        st.warning("데이터를 불러오지 못했습니다. 키워드 선택 및 API 설정을 다시 확인해주세요.")
