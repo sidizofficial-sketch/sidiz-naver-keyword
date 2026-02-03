@@ -88,13 +88,6 @@ num_groups = st.slider("비교할 그룹 개수", 1, 10, 2)
 cols = st.columns(min(num_groups, 3)) 
 filter_configs = {}
 
-# --- 비교 필터 섹션 ---
-st.subheader("🛠️ 비교 그룹 설정 (최대 10개)")
-num_groups = st.slider("비교할 그룹 개수", 1, 10, 2)
-
-cols = st.columns(min(num_groups, 3)) 
-filter_configs = {}
-
 # 여기서부터가 새로 바뀐 for문입니다.
 for i in range(num_groups):
     with cols[i % 3]:
