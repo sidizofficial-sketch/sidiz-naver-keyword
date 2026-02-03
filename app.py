@@ -88,34 +88,51 @@ num_groups = st.slider("비교할 그룹 개수", 1, 10, 2)
 cols = st.columns(min(num_groups, 3)) 
 filter_configs = {}
 
+# --- 비교 필터 섹션 ---
+st.subheader("🛠️ 비교 그룹 설정 (최대 10개)")
+num_groups = st.slider("비교할 그룹 개수", 1, 10, 2)
+
+cols = st.columns(min(num_groups, 3)) 
+filter_configs = {}
+
+# 여기서부터가 새로 바뀐 for문입니다.
 for i in range(num_groups):
     with cols[i % 3]:
         with st.expander(f"비교 대상 {i+1}", expanded=True):
             group_label = st.text_input(f"그룹 이름 {i+1}", f"대상 {i+1}", key=f"label_{i}")
             
-            # 1. 여러 그룹(브랜드) 선택 가능
+            # 1. 브랜드(GROUP) 선택
             all_groups = sorted(master_df['GROUP'].unique().tolist())
             selected_groups = st.multiselect(
-                f"포함할 그룹(GROUP) - 여러 개 선택 가능", 
+                f"브랜드 선택", 
                 options=all_groups, 
-                key=f"gr_{i}",
-                help="드롭다운에서 여러 브랜드를 클릭하여 추가하세요."
+                key=f"gr_{i}"
             )
             
-            # 2. 선택된 그룹들에 속한 모든 키워드 자동 나열
             if selected_groups:
-                available_kws = master_df[master_df['GROUP'].isin(selected_groups)]['KEYWORD'].unique().tolist()
+                # 선택된 브랜드의 키워드 추출
+                available_kws = sorted(master_df[master_df['GROUP'].isin(selected_groups)]['KEYWORD'].unique().tolist())
                 
-                # 키워드도 여러 개 선택 가능 (기본값으로 해당 그룹의 모든 키워드 설정)
+                # 💡 전체 선택 체크박스 추가
+                select_all = st.checkbox(f"모든 키워드 자동 선택", key=f"all_{i}", value=True)
+                
+                # 체크박스 상태에 따라 기본 선택값 결정
+                default_selection = available_kws if select_all else []
+
+                # 2. 세부 키워드 다중 선택 드롭다운
                 selected_kws = st.multiselect(
-                    f"세부 키워드 선택", 
-                    options=sorted(available_kws), 
-                    default=available_kws, 
+                    f"세부 키워드 (검색 가능)", 
+                    options=available_kws, 
+                    default=default_selection, 
                     key=f"kw_{i}"
                 )
+                
+                st.caption(f"✅ {len(selected_kws)}개 키워드 선택됨")
                 filter_configs[group_label] = selected_kws
             else:
-                st.info("먼저 그룹(브랜드)을 선택해주세요.")
+                st.info("먼저 브랜드를 선택해주세요.")
+
+# --- 이후 분석 실행 버튼 코드 (if st.button...) 가 이어집니다.
 # --- 분석 실행 ---
 if st.button("📈 데이터 분석 및 차트 생성"):
     all_plot_data = []
