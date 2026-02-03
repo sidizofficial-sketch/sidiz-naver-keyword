@@ -64,8 +64,13 @@ except KeyError:
 
 with st.sidebar:
     st.header("⚙️ 데이터 설정")
-    # 시트 ID는 공개되어도 상관없으므로 기본값으로 설정
     sheet_id = st.text_input("Google Sheet ID", value="1JnEKEe7HDbN5NG8l0kZ55Rtihp9SBbauD0CzhKQX-qM")
+    
+    # 📅 기간 설정 추가
+    st.markdown("---")
+    st.subheader("📅 분석 기간 설정")
+    start_date = st.date_input("시작일", pd.to_datetime("2025-01-01"))
+    end_date = st.date_input("종료일", pd.to_datetime("today"))
 
 # 시트 데이터 불러오기
 try:
@@ -76,7 +81,7 @@ except:
 
 st.title("💺 의자 키워드 그룹별 비교 대시보드")
 
-# --- 비교 필터 섹션 ---
+# --- 비교 필터 섹션 (여러 개 선택 가능하도록 최적화) ---
 st.subheader("🛠️ 비교 그룹 설정 (최대 10개)")
 num_groups = st.slider("비교할 그룹 개수", 1, 10, 2)
 
@@ -87,11 +92,30 @@ for i in range(num_groups):
     with cols[i % 3]:
         with st.expander(f"비교 대상 {i+1}", expanded=True):
             group_label = st.text_input(f"그룹 이름 {i+1}", f"대상 {i+1}", key=f"label_{i}")
-            selected_groups = st.multiselect(f"포함할 그룹(GROUP)", options=sorted(master_df['GROUP'].unique().tolist()), key=f"gr_{i}")
-            available_kws = master_df[master_df['GROUP'].isin(selected_groups)]['KEYWORD'].tolist()
-            selected_kws = st.multiselect(f"세부 키워드 선택", options=sorted(available_kws), default=available_kws, key=f"kw_{i}")
-            filter_configs[group_label] = selected_kws
-
+            
+            # 1. 여러 그룹(브랜드) 선택 가능
+            all_groups = sorted(master_df['GROUP'].unique().tolist())
+            selected_groups = st.multiselect(
+                f"포함할 그룹(GROUP) - 여러 개 선택 가능", 
+                options=all_groups, 
+                key=f"gr_{i}",
+                help="드롭다운에서 여러 브랜드를 클릭하여 추가하세요."
+            )
+            
+            # 2. 선택된 그룹들에 속한 모든 키워드 자동 나열
+            if selected_groups:
+                available_kws = master_df[master_df['GROUP'].isin(selected_groups)]['KEYWORD'].unique().tolist()
+                
+                # 키워드도 여러 개 선택 가능 (기본값으로 해당 그룹의 모든 키워드 설정)
+                selected_kws = st.multiselect(
+                    f"세부 키워드 선택", 
+                    options=sorted(available_kws), 
+                    default=available_kws, 
+                    key=f"kw_{i}"
+                )
+                filter_configs[group_label] = selected_kws
+            else:
+                st.info("먼저 그룹(브랜드)을 선택해주세요.")
 # --- 분석 실행 ---
 if st.button("📈 데이터 분석 및 차트 생성"):
     all_plot_data = []
