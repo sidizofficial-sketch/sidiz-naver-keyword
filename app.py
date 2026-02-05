@@ -105,38 +105,78 @@ for i in range(num_groups):
 
 # --- 4. 분석 실행 섹션 ---
 
-# 변수 초기화 (에러 방지용)
-all_results = []
+# (기존 그래프 및 테이블 출력 코드 유지...)
+        st.plotly_chart(fig_main, use_container_width=True)
+        
+        st.markdown("---")
+        st.subheader("📋 키워드별 상세 검색량 데이터")
+        df_detail = df_res.pivot_table(
+            index=["비교대상", "키워드"], 
+            columns="년월", 
+            values="검색량", 
+            aggfunc="sum", 
+            fill_value=0
+        ).reset_index()
+        st.dataframe(df_detail, use_container_width=True)
 
-if st.button("📈 월별 데이터 분석 시작"):
-    with st.spinner("네이버 API에서 데이터를 가져오는 중..."):
-        # filter_configs에 설정된 그룹별로 루프
-        for label, keywords in filter_configs.items():
-            if not keywords: continue
+# --- 5. AI 인사이트 & Opportunity Finder 섹션 ---
+st.divider()
+st.subheader("🤖 Gemini AI 마케팅 관제 센터")
+
+# 데이터가 분석된 상태인지 확인
+if 'df_res' in locals() and not df_res.empty:
+    # Gemini 설정
+    if "GEMINI_API_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('gemini-1.5-flash')
+
+        # 데이터 요약 생성 (AI 전달용)
+        data_summary = df_res.groupby(['년월', '비교대상'])['검색량'].sum().reset_index().to_string(index=False)
+        
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### 💬 데이터 인사이트 챗봇")
+            user_question = st.text_input("질문을 입력하세요 (예: 1월에 에어론이 급증한 이유가 뭘까?)")
             
-            for kw in keywords:
-                # 1. 검색광고 API: 전체 볼륨
-                total_vol = get_naver_search_vol(kw, NAVER_KEYS["api"], NAVER_KEYS["sec"], NAVER_KEYS["cust"])
+            if user_question:
+                chat_prompt = f"""
+                아래는 네이버 검색량 데이터야:
+                {data_summary}
                 
-                # 2. 데이터랩 API: 월별 트렌드 (s_date, e_date 사용)
-                trends = get_datalab_trend(kw, NAVER_KEYS["client_id"], NAVER_KEYS["client_secret"], s_date, e_date)
-                
-                # 3. 비중 계산 및 데이터 저장
-                if trends:
-                    total_ratio = sum(trends.values())
-                    for month, ratio in trends.items():
-                        # 트렌드 비중에 맞춰 전체 검색량을 월별로 배분
-                        monthly_vol = int((ratio / total_ratio) * total_vol) if total_ratio > 0 else 0
-                        all_results.append({
-                            "비교대상": label, 
-                            "년월": month, 
-                            "키워드": kw, 
-                            "검색량": monthly_vol
-                        })
-                else:
-                    # 트렌드 데이터가 없을 경우 0으로 처리하거나 생략
-                    pass
+                질문: {user_question}
+                전문적인 마케터의 관점에서 한국어로 친절하게 답변해줘.
+                """
+                with st.spinner("Gemini가 생각 중..."):
+                    response = model.generate_content(chat_prompt)
+                    st.info(response.text)
 
+        with col2:
+            st.markdown("#### 🚀 AI Opportunity Finder")
+            st.write("시트 외에 우리가 놓치고 있는 새로운 키워드 기회를 포착합니다.")
+            
+            if st.button("🔍 신규 기회 분석 시작"):
+                current_kws = df_res['키워드'].unique().tolist()
+                opp_prompt = f"""
+                현재 우리는 {current_kws} 키워드들을 분석하고 있어.
+                데이터 요약: {data_summary}
+                
+                이 브랜드들과 경쟁 관계에 있거나, 의자 구매 여정(비교, 추천, 사이즈 등)에서 
+                실제 구매 의도가 높지만 위 리스트에는 없는 '황금 키워드' 3가지만 추천해줘.
+                
+                조건:
+                1. '토트넘' 같은 단순 이슈 키워드는 철저히 배제할 것.
+                2. 왜 이 키워드가 기회인지 마케팅 지표 관점에서 설명할 것.
+                3. 각 키워드별로 예상되는 고객의 페르소나를 짧게 언급할 것.
+                """
+                with st.spinner("시장 트렌드 분석 중..."):
+                    opp_response = model.generate_content(opp_prompt)
+                    st.success("✨ 제미나이의 전략 제안")
+                    st.markdown(opp_response.text)
+    else:
+        st.warning("⚠️ Secrets에 'GEMINI_API_KEY'를 등록하면 AI 기능을 사용할 수 있습니다.")
+else:
+    st.info("💡 위에서 [📈 데이터 분석 시작] 버튼을 먼저 눌러주세요. 데이터가 로드되어야 AI 분석이 가능합니다.")
 # 결과 출력
     if all_results:
         df_res = pd.DataFrame(all_results)
