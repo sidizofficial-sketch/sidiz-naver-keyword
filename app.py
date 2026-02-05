@@ -8,7 +8,7 @@ import requests
 import plotly.express as px
 from datetime import datetime
 
-# --- 1. 네이버 API 인증 및 호출 함수 ---
+# --- 1. 네이버 API 인증 및 호출 함수 (안정성 강화) ---
 def generate_signature(timestamp, method, uri, secret_key):
     message = f"{timestamp}.{method}.{uri}"
     hash = hmac.new(bytes(secret_key, "utf-8"), bytes(message, "utf-8"), hashlib.sha256)
@@ -24,7 +24,8 @@ def get_naver_search_vols_bulk(keywords, api_key, secret_key, customer_id):
     params = {'hintKeywords': ",".join(keywords[:5]), 'showDetail': '1'}
     vols = {}
     try:
-        res = requests.get(BASE_URL + uri, params=params, headers=headers, timeout=5).json()
+        # 타임아웃을 10초로 늘려 안정성 확보
+        res = requests.get(BASE_URL + uri, params=params, headers=headers, timeout=10).json()
         if 'keywordList' in res:
             for item in res['keywordList']:
                 pc = str(item['monthlyPcQcCnt']).replace('< ', '10')
@@ -44,8 +45,8 @@ def get_datalab_trend(keyword, client_id, client_secret, start_date, end_date, t
         "keywordGroups": [{"groupName": keyword, "keywords": [keyword]}]
     }
     try:
-        res = requests.post(url, headers=headers, json=body, timeout=5).json()
-        if 'results' in res:
+        res = requests.post(url, headers=headers, json=body, timeout=10).json()
+        if 'results' in res and res['results'][0]['data']:
             return {d['period']: d['ratio'] for d in res['results'][0]['data']}
     except: pass
     return {}
@@ -69,7 +70,7 @@ def load_all_data(sheet_id):
     return m_df, presets
 
 # --- 3. UI 및 설정 ---
-st.set_page_config(page_title="시디즈 마케팅 분석", layout="wide")
+st.set_page_config(page_title="시디즈 마케팅 대시보드", layout="wide")
 
 try:
     keys = {k: st.secrets[k.upper()] for k in ["naver_api_key", "naver_secret_key", "naver_customer_id", "naver_client_id", "naver_client_secret"]}
@@ -82,100 +83,100 @@ with st.sidebar:
     unit = st.radio("집계 단위", ["일자별", "주차별", "월별"], index=2)
     s_date = st.date_input("시작일", datetime(2024, 12, 1))
     e_date = st.date_input("종료일", datetime(2025, 1, 31))
-    if st.button("🔄 시트 새로고침"): st.cache_data.clear(); st.rerun()
+    if st.button("🔄 전체 새로고침"): st.cache_data.clear(); st.rerun()
 
 master_df, presets = load_all_data(sid)
 
-# 세션 상태 초기화
+# 세션 상태 관리
 if 'active_groups' not in st.session_state: st.session_state.active_groups = {}
 if 'num_targets' not in st.session_state: st.session_state.num_targets = 2
 
 st.title("📊 시리즈별 마켓쉐어 상세 분석")
 
-# --- 4. 퀵 프리셋 버튼 (연동형) ---
+# --- 4. 프리셋 버튼 ---
 if presets:
-    st.subheader("⚡ 구글 시트 프리셋 템플릿")
-    p_cols = st.columns(5)
+    st.subheader("⚡ 퀵 프리셋")
+    p_cols = st.columns(len(presets) if len(presets) < 6 else 5)
     for i, (name, items) in enumerate(presets.items()):
-        if p_cols[i % 5].button(name, key=f"p_{i}", use_container_width=True):
-            # 프리셋에 있는 항목들이 GROUP인지 KEYWORD인지 판단하여 매칭
-            matched = master_df[master_df['GROUP'].isin(items) | master_df['KEYWORD'].isin(items)]
-            st.session_state.num_targets = 1
-            st.session_state.active_groups = {
-                "label_0": name,
-                "groups_0": matched['GROUP'].unique().tolist(),
-                "kws_0": matched['KEYWORD'].unique().tolist()
-            }
-            st.rerun()
+        with p_cols[i % 5]:
+            if st.button(name, key=f"p_{i}", use_container_width=True):
+                matched = master_df[master_df['GROUP'].isin(items) | master_df['KEYWORD'].isin(items)]
+                st.session_state.num_targets = 1
+                st.session_state.active_groups = {
+                    "label_0": name,
+                    "groups_0": matched['GROUP'].unique().tolist(),
+                    "kws_0": matched['KEYWORD'].unique().tolist()
+                }
+                st.rerun()
 
 st.markdown("---")
 
-# --- 5. 분석 대상 설정 (GROUP -> KEYWORD 선택) ---
-st.subheader("🛠️ 분석 대상 직접 설정")
+# --- 5. 분석 대상 설정 ---
+st.subheader("🛠️ 분석 대상 설정")
 num_targets = st.number_input("분석 대상 개수", min_value=1, max_value=5, value=st.session_state.num_targets)
 st.session_state.num_targets = num_targets
 
 final_filter = {}
 group_options = sorted(master_df['GROUP'].unique().tolist())
-
 cols = st.columns(num_targets)
+
 for i in range(num_targets):
     with cols[i]:
-        st.markdown(f"**대상 {i+1}**")
-        
-        # 세션 데이터 로드
         def_label = st.session_state.active_groups.get(f"label_{i}", f"비교군 {i+1}")
-        def_groups = st.session_state.active_groups.get(f"groups_0" if i==0 and st.session_state.active_groups else f"groups_{i}", [])
-        def_kws = st.session_state.active_groups.get(f"kws_0" if i==0 and st.session_state.active_groups else f"kws_{i}", [])
+        def_groups = st.session_state.active_groups.get(f"groups_{i}", [])
+        def_kws = st.session_state.active_groups.get(f"kws_{i}", [])
 
-        label = st.text_input("분석 명칭", value=def_label, key=f"lab_{i}")
-        sel_groups = st.multiselect("브랜드(GROUP) 선택", options=group_options, default=def_groups, key=f"gr_{i}")
+        label = st.text_input(f"대상 {i+1} 이름", value=def_label, key=f"lab_{i}")
+        sel_groups = st.multiselect(f"그룹(브랜드) 선택", options=group_options, default=def_groups, key=f"gr_{i}")
         
-        # 선택된 그룹에 속한 키워드만 필터링해서 보여줌
         if sel_groups:
             kw_options = sorted(master_df[master_df['GROUP'].isin(sel_groups)]['KEYWORD'].unique().tolist())
-            # 프리셋에서 넘어온 키워드 중, 현재 선택된 그룹에 속한 것만 default로 설정
-            current_def_kws = [k for k in def_kws if k in kw_options] if def_kws else kw_options
-            
-            sel_kws = st.multiselect("세부 키워드 선택", options=kw_options, default=current_def_kws, key=f"kw_{i}")
+            current_def = [k for k in def_kws if k in kw_options] if def_kws else kw_options
+            sel_kws = st.multiselect(f"키워드 선택", options=kw_options, default=current_def, key=f"kw_{i}")
             if label and sel_kws:
                 final_filter[label] = sel_kws
 
-# --- 6. 분석 실행 ---
+# --- 6. 분석 실행 (강력한 예외처리 버전) ---
 st.markdown("---")
 if final_filter:
-    if st.button("🚀 분석 시작 (네이버 API 호출)", type="primary", use_container_width=True):
+    if st.button("🚀 분석 시작", type="primary", use_container_width=True):
         results = []
         all_unique_kws = list(set([kw for kws in final_filter.values() for kw in kws]))
+        
         progress = st.progress(0)
         status = st.empty()
         
-        # 단계 1: 검색량 조회
+        # 1단계: 검색량 조회
         all_vols = {}
         for i in range(0, len(all_unique_kws), 5):
             chunk = all_unique_kws[i:i+5]
-            status.text(f"🔍 검색량 조회 중... ({min(i+5, len(all_unique_kws))}/{len(all_unique_kws)})")
+            status.text(f"🔍 네이버 검색량 데이터 수집 중... ({min(i+5, len(all_unique_kws))}/{len(all_unique_kws)})")
             all_vols.update(get_naver_search_vols_bulk(chunk, keys["naver_api_key"], keys["naver_secret_key"], keys["naver_customer_id"]))
-            progress.progress(min((i+5)/(len(all_unique_kws)*2), 0.5))
+            progress.progress(min((i+5)/(len(all_unique_kws)*2), 0.4))
+            time.sleep(0.2) # 속도 조절
+
+        # 2단계: 트렌드 조회 및 매칭
+        current_idx = 0
+        total_kws = sum(len(v) for v in final_filter.values())
         
-        # 단계 2: 트렌드 조회
-        total_steps = sum(len(kws) for kws in final_filter.values())
-        current_step = 0
         for group_label, kws in final_filter.items():
             for kw in kws:
-                current_step += 1
-                status.text(f"⏳ [{group_label}] 분석 중: {kw} ({current_step}/{total_steps})")
+                current_idx += 1
+                status.text(f"⏳ [{group_label}] 분석 중: {kw} ({current_idx}/{total_kws})")
+                
                 vol = all_vols.get(kw, 0)
                 trends = get_datalab_trend(kw, keys["naver_client_id"], keys["naver_client_secret"], s_date, e_date, unit)
+                
                 if trends:
                     total_r = sum(trends.values())
                     for p, r in trends.items():
                         results.append({
                             "분석대상": group_label, "기간": p, "키워드": kw,
-                            "검색량": int((r/total_r)*vol) if total_r>0 else 0
+                            "검색량": int((r/total_r)*vol) if total_r > 0 else 0
                         })
-                progress.progress(0.5 + (current_step / total_steps / 2))
-        
+                progress.progress(0.4 + (current_idx / total_kws / 1.7))
+                time.sleep(0.1)
+
         status.empty(); progress.empty()
 
         if results:
@@ -184,8 +185,9 @@ if final_filter:
             df_grp['비중'] = (df_grp['검색량'] / df_grp.groupby('기간')['검색량'].transform('sum') * 100).round(1)
             
             fig = px.bar(df_grp, x="검색량", y="기간", color="분석대상", orientation='h', barmode='stack',
-                         text=df_grp.apply(lambda x: f"{x['검색량']:,} ({x['비중']}%)", axis=1), height=600)
+                         text=df_grp.apply(lambda x: f"{x['검색량']:,} ({x['비중']}%)", axis=1), height=600,
+                         color_discrete_sequence=px.colors.qualitative.Pastel)
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df.pivot_table(index=["분석대상", "키워드"], columns="기간", values="검색량", aggfunc="sum"))
-else:
-    st.info("그룹(GROUP)과 키워드를 선택하면 분석 버튼이 활성화됩니다.")
+        else:
+            st.error("데이터를 수집하지 못했습니다. 키워드 선택을 줄이거나 API 설정을 확인하세요.")
