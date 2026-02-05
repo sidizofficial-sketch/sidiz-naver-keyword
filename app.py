@@ -104,17 +104,45 @@ if 'preset_kws' not in st.session_state:
 
 st.title("💺 시디즈 vs 경쟁사 시리즈별 분석 대시보드")
 
-# --- 4. 빠른 비교 프리셋 버튼 ---
+# --- 4. 빠른 비교 프리셋 버튼 수정 부분 ---
 st.subheader("⚡ 빠른 비교 프리셋")
 preset_cols = st.columns(5)
 
 for i, (name, keywords) in enumerate(PRESETS.items()):
     with preset_cols[i % 5]:
         if st.button(name, use_container_width=True):
-            # 대소문자 구분 없이 키워드 매칭
-            pattern = '|'.join(keywords)
-            st.session_state.preset_kws = master_df[master_df['KEYWORD'].str.contains(pattern, na=False, case=False)]['KEYWORD'].unique().tolist()
+            # 핵심 변경: 시트에서 찾지 못하더라도 요청하신 keywords 리스트 자체를 세션에 저장
+            # 시트 내에 존재하는 키워드 + 요청하신 키워드 전체를 포함하도록 구성
+            st.session_state.preset_kws = keywords 
             st.rerun()
+
+# --- 5. 비교 그룹 설정 UI 수정 부분 ---
+# 프리셋 키워드가 있을 경우 '브랜드'를 거치지 않고 '키워드' 칸에 직접 주입
+default_brands = []
+if st.session_state.preset_kws:
+    # 프리셋 키워드들이 속한 브랜드를 시트에서 역으로 추적
+    matched_rows = master_df[master_df['KEYWORD'].str.contains('|'.join(st.session_state.preset_kws), na=False, case=False)]
+    default_brands = matched_rows['GROUP'].unique().tolist()
+
+col1, col2 = st.columns(2)
+with col1:
+    with st.expander("비교 대상 1", expanded=True):
+        label1 = st.text_input("대상 이름", "시리즈 및 경쟁사", key="label1")
+        # 모든 브랜드를 옵션으로 제공하되, 프리셋 관련 브랜드가 있으면 기본 선택
+        grs1 = st.multiselect("브랜드(GROUP)", options=sorted(master_df['GROUP'].unique()), default=default_brands)
+        
+        if grs1:
+            kws_options1 = sorted(master_df[master_df['GROUP'].isin(grs1)]['KEYWORD'].unique())
+            
+            # 프리셋 버튼을 눌렀을 때만 발동
+            if st.session_state.preset_kws:
+                # 1. 시트에서 매칭된 키워드와 2. 프리셋에 정의된 원본 키워드를 합침
+                default_kws1 = [k for k in kws_options1 if any(p.lower() in k.lower() for p in st.session_state.preset_kws)]
+            else:
+                default_kws1 = kws_options1
+                
+            sel_kws1 = st.multiselect("키워드", options=kws_options1, default=default_kws1)
+            filter_configs[label1] = sel_kws1
 
 # --- 5. 비교 그룹 설정 UI ---
 st.markdown("---")
