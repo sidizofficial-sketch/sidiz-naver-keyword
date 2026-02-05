@@ -73,7 +73,7 @@ except:
     st.error("Secrets 설정을 확인해주세요.")
     st.stop()
 
-# 프리셋 정의 (요청하신 10개 그룹)
+# 프리셋 데이터 정의
 PRESETS = {
     "1. GC PRO & GX": ["제닉스", "시크릿랩", "클라우드백", "GC PRO", "GX", "에이픽스", "듀오백"],
     "2. T80 & T90": ["허먼밀러", "에어론", "T80", "스틸케이스", "T90", "휴먼스케일", "엠바디", "하워스"],
@@ -97,53 +97,70 @@ with st.sidebar:
     e_date = st.date_input("종료일", datetime(2025, 1, 31))
 
 master_df = load_data_from_gsheets(sheet_id)
+
+# 세션 상태 초기화 (프리셋 선택 저장용)
+if 'preset_kws' not in st.session_state:
+    st.session_state.preset_kws = []
+
 st.title("💺 시디즈 vs 경쟁사 시리즈별 분석 대시보드")
 
 # --- 4. 빠른 비교 프리셋 버튼 ---
 st.subheader("⚡ 빠른 비교 프리셋")
 preset_cols = st.columns(5)
-selected_preset_kws = []
 
 for i, (name, keywords) in enumerate(PRESETS.items()):
     with preset_cols[i % 5]:
         if st.button(name, use_container_width=True):
-            # 시트 데이터에서 해당 키워드가 포함된 행 필터링
-            selected_preset_kws = master_df[master_df['KEYWORD'].str.contains('|'.join(keywords), na=False, case=False)]['KEYWORD'].tolist()
-            st.success(f"'{name}' 그룹이 선택되었습니다.")
+            # 대소문자 구분 없이 키워드 매칭
+            pattern = '|'.join(keywords)
+            st.session_state.preset_kws = master_df[master_df['KEYWORD'].str.contains(pattern, na=False, case=False)]['KEYWORD'].unique().tolist()
+            st.rerun()
 
 # --- 5. 비교 그룹 설정 UI ---
 st.markdown("---")
-num_groups = st.slider("비교 그룹 수 (직접 설정 시)", 1, 5, 2)
-cols = st.columns(num_groups)
+# 프리셋이 선택되었다면 그룹 1에 모두 몰아넣고 분석할 준비를 함
 filter_configs = {}
 
-for i in range(num_groups):
-    with cols[i]:
-        with st.expander(f"비교 대상 {i+1}", expanded=True):
-            label = st.text_input(f"대상 이름", f"그룹 {i+1}", key=f"l_{i}")
-            grs = st.multiselect(f"브랜드(GROUP)", options=sorted(master_df['GROUP'].unique()), key=f"g_{i}")
-            if grs:
-                kws_options = sorted(master_df[master_df['GROUP'].isin(grs)]['KEYWORD'].unique())
-                # 프리셋 버튼이 눌렸다면 해당 키워드를 기본값으로 세팅
-                default_kws = [k for k in kws_options if k in selected_preset_kws] if selected_preset_kws else kws_options
-                
-                sel_kws = st.multiselect("키워드", options=kws_options, default=default_kws, key=f"kw_{i}")
-                filter_configs[label] = sel_kws
+# 프리셋 키워드가 있을 경우 자동으로 그룹 1을 채움
+default_brands = []
+if st.session_state.preset_kws:
+    default_brands = master_df[master_df['KEYWORD'].isin(st.session_state.preset_kws)]['GROUP'].unique().tolist()
+
+col1, col2 = st.columns(2)
+with col1:
+    with st.expander("비교 대상 1", expanded=True):
+        label1 = st.text_input("대상 이름", "시리즈 및 경쟁사", key="label1")
+        grs1 = st.multiselect("브랜드(GROUP)", options=sorted(master_df['GROUP'].unique()), default=default_brands)
+        if grs1:
+            kws_options1 = sorted(master_df[master_df['GROUP'].isin(grs1)]['KEYWORD'].unique())
+            # 프리셋 키워드가 있으면 그것들을 기본 선택, 없으면 전체 선택
+            default_kws1 = [k for k in kws_options1 if k in st.session_state.preset_kws] if st.session_state.preset_kws else kws_options1
+            sel_kws1 = st.multiselect("키워드", options=kws_options1, default=default_kws1)
+            filter_configs[label1] = sel_kws1
+
+with col2:
+    with st.expander("비교 대상 2 (자유 선택)", expanded=True):
+        label2 = st.text_input("대상 이름", "기타 그룹", key="label2")
+        grs2 = st.multiselect("브랜드(GROUP)", options=sorted(master_df['GROUP'].unique()), key="grs2")
+        if grs2:
+            kws_options2 = sorted(master_df[master_df['GROUP'].isin(grs2)]['KEYWORD'].unique())
+            sel_kws2 = st.multiselect("키워드", options=kws_options2, key="sel_kws2")
+            filter_configs[label2] = sel_kws2
 
 # --- 6. 분석 실행 ---
-if st.button(f"📈 {time_unit} 데이터 분석 시작"):
+if st.button(f"📈 {time_unit} 데이터 분석 시작") or (st.session_state.preset_kws and not filter_configs == {}):
     all_results = []
+    # 중복 방지를 위해 분석할 키워드 추출
     with st.spinner(f"네이버 API 데이터 수집 중..."):
         for label, keywords in filter_configs.items():
             if not keywords: continue
             for kw in keywords:
-                total_vol = get_naver_search_vol(kw, NAVER_KEYS["api"], NAVER_KEYS["sec"], NAVER_KEYS["cust"])
+                vol = get_naver_search_vol(kw, NAVER_KEYS["api"], NAVER_KEYS["sec"], NAVER_KEYS["cust"])
                 trends = get_datalab_trend(kw, NAVER_KEYS["client_id"], NAVER_KEYS["client_secret"], s_date, e_date, time_unit)
-                
                 if trends:
                     total_ratio = sum(trends.values())
                     for period, ratio in trends.items():
-                        period_vol = int((ratio / total_ratio) * total_vol) if total_ratio > 0 else 0
+                        period_vol = int((ratio / total_ratio) * vol) if total_ratio > 0 else 0
                         all_results.append({"비교대상": label, "기간": period, "키워드": kw, "검색량": period_vol})
 
     if all_results:
@@ -151,10 +168,17 @@ if st.button(f"📈 {time_unit} 데이터 분석 시작"):
         df_group = df_res.groupby(['기간', '비교대상'])['검색량'].sum().reset_index()
         df_group['비중'] = (df_group['검색량'] / df_group.groupby('기간')['검색량'].transform('sum') * 100).round(1)
         
-        fig = px.bar(df_group, x="검색량", y="기간", color="비교대상", orientation='h', text=df_group.apply(lambda x: f"{x['검색량']:,} ({x['비중']}%)", axis=1),
-                     barmode='stack', title=f"[{time_unit}] 시리즈별 시장 점유율 분석", height=600, color_discrete_sequence=px.colors.qualitative.Pastel)
+        fig = px.bar(df_group, x="검색량", y="기간", color="비교대상", orientation='h', 
+                     text=df_group.apply(lambda x: f"{x['검색량']:,} ({x['비중']}%)", axis=1),
+                     barmode='stack', title=f"[{time_unit}] 시리즈별 시장 점유율 분석", 
+                     height=600, color_discrete_sequence=px.colors.qualitative.Pastel)
         fig.update_yaxes(categoryorder='category descending')
         st.plotly_chart(fig, use_container_width=True)
         
         st.subheader("📋 상세 수치 데이터")
         st.dataframe(df_res.pivot_table(index=["비교대상", "키워드"], columns="기간", values="검색량", aggfunc="sum", fill_value=0), use_container_width=True)
+        
+        # 분석 후 프리셋 초기화 (선택 사항)
+        # st.session_state.preset_kws = []
+    else:
+        st.warning("분석할 데이터를 찾지 못했습니다. 키워드가 구글 시트에 있는지 확인해주세요.")
