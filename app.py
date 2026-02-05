@@ -50,10 +50,10 @@ def get_datalab_trend(keyword, client_id, client_secret, start_date, end_date, t
     except: pass
     return {}
 
-# --- 2. 구글 시트 데이터 로딩 (메인 데이터 & 프리셋) ---
+# --- 2. 구글 시트 데이터 로딩 ---
 @st.cache_data
 def load_main_data(sheet_id):
-    # 첫 번째 탭 (키워드/그룹 매칭 데이터)
+    # 첫 번째 탭 데이터
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
     df = pd.read_csv(url)
     df.columns = [c.strip().upper() for c in df.columns]
@@ -61,20 +61,21 @@ def load_main_data(sheet_id):
 
 @st.cache_data
 def load_presets(sheet_id):
-    # PRESETS 탭 (프리셋 이름/구성 리스트)
+    # PRESETS 탭 데이터 (탭 이름을 더 정확히 찾기 위해 gid 대신 sheet name 사용)
+    # csv export 시 sheet 파라미터가 가끔 작동하지 않으므로 gviz api 활용
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet=PRESETS"
     try:
         pdf = pd.read_csv(url)
+        if pdf.empty: return {}
         pdf.columns = [c.strip().upper() for c in pdf.columns]
         presets = {}
         for _, row in pdf.iterrows():
             name = str(row['NAME']).strip()
-            # 쉼표로 구분된 그룹/키워드들을 리스트로 변환
             items = [i.strip() for i in str(row['KEYWORDS']).split(',')]
             presets[name] = items
         return presets
-    except:
-        return {}
+    except Exception as e:
+        return {"error": str(e)}
 
 # --- 3. UI 및 기본 설정 ---
 st.set_page_config(page_title="시디즈 마케팅 분석 대시보드", layout="wide")
@@ -86,7 +87,7 @@ try:
         "client_secret": st.secrets["NAVER_CLIENT_SECRET"]
     }
 except:
-    st.error("Secrets 설정을 확인해주세요 (네이버 API 키 5종 필요).")
+    st.error("Secrets 설정을 확인해주세요 (네이버 API 키 필요).")
     st.stop()
 
 with st.sidebar:
@@ -104,20 +105,23 @@ with st.sidebar:
 master_df = load_main_data(sheet_id)
 sheet_presets = load_presets(sheet_id)
 
-# 세션 상태 초기화 (선택된 프리셋 저장)
+# 세션 상태 초기화
 if 'active_preset_name' not in st.session_state: st.session_state.active_preset_name = None
 if 'active_preset_kws' not in st.session_state: st.session_state.active_preset_kws = []
 
 st.title("💺 시디즈 vs 경쟁사 마켓쉐어 관제 센터")
 
 # --- 4. 시트 기반 프리셋 버튼 UI ---
-if sheet_presets:
-    st.subheader("⚡ 퀵 분석 프리셋 (구글 시트 연동)")
+if "error" in sheet_presets:
+    st.sidebar.warning(f"PRESETS 탭을 찾을 수 없습니다. (에러: {sheet_presets['error']})")
+    st.info("💡 구글 시트에 'PRESETS'라는 이름의 탭이 있는지, NAME과 KEYWORDS 열이 있는지 확인해주세요.")
+elif sheet_presets:
+    st.subheader("⚡ 퀵 그룹 분석 프리셋")
     p_cols = st.columns(5)
     for i, (p_name, p_items) in enumerate(sheet_presets.items()):
         with p_cols[i % 5]:
             if st.button(p_name, key=f"pbtn_{i}", use_container_width=True):
-                # 지능형 매칭: 프리셋에 적힌 이름이 GROUP이거나 KEYWORD인 모든 데이터 추출
+                # 지능형 매칭: 그룹명 또는 키워드명에 포함된 모든 데이터 추출
                 matched_data = master_df[
                     master_df['GROUP'].isin(p_items) | 
                     master_df['KEYWORD'].isin(p_items)
@@ -125,16 +129,18 @@ if sheet_presets:
                 if not matched_data.empty:
                     st.session_state.active_preset_name = p_name
                     st.session_state.active_preset_kws = matched_data['KEYWORD'].unique().tolist()
-                    st.success(f"'{p_name}' 분석 그룹이 준비되었습니다.")
+                    st.rerun() # 즉시 반영을 위해 리런
                 else:
-                    st.error(f"'{p_name}'에 해당하는 데이터를 시트에서 찾을 수 없습니다.")
+                    st.error(f"'{p_name}'의 키워드({p_items})가 메인 시트에 없습니다.")
+else:
+    st.info("상단에 표시할 프리셋이 없습니다. 구글 시트의 'PRESETS' 탭을 확인해주세요.")
 
 # --- 5. 분석 실행 및 결과 시각화 ---
 st.markdown("---")
 if st.session_state.active_preset_name:
-    st.info(f"📍 현재 분석 대상: **{st.session_state.active_preset_name}** ({len(st.session_state.active_preset_kws)}개 키워드 합산)")
+    st.success(f"✅ 선택됨: **{st.session_state.active_preset_name}** ({len(st.session_state.active_preset_kws)}개 키워드 합산)")
     
-    if st.button("🚀 데이터 분석 시작 (네이버 API 호출)", type="primary"):
+    if st.button("🚀 분석 시작", type="primary"):
         all_results = []
         progress_bar = st.progress(0)
         kws = st.session_state.active_preset_kws
@@ -147,40 +153,32 @@ if st.session_state.active_preset_name:
                 total_ratio = sum(trends.values())
                 for period, ratio in trends.items():
                     val = int((ratio / total_ratio) * vol) if total_ratio > 0 else 0
-                    # 개별 키워드 데이터도 기록하지만, 최종 그래프는 프리셋 이름으로 묶음
+                    row = master_df[master_df['KEYWORD'] == kw]
+                    brand_name = row['GROUP'].values[0] if not row.empty else "알 수 없음"
                     all_results.append({
                         "분석그룹": st.session_state.active_preset_name,
                         "기간": period,
                         "상세키워드": kw,
-                        "브랜드": master_df[master_df['KEYWORD'] == kw]['GROUP'].values[0],
+                        "브랜드": brand_name,
                         "검색량": val
                     })
             progress_bar.progress((idx + 1) / len(kws))
 
         if all_results:
             df_res = pd.DataFrame(all_results)
-            
-            # 그래프용 데이터 가공 (브랜드별로 쌓아서 보여줌)
             df_chart = df_res.groupby(['기간', '브랜드'])['검색량'].sum().reset_index()
-            df_chart['기간총합'] = df_chart.groupby('기간')['검색량'].transform('sum')
-            df_chart['비중'] = (df_chart['검색량'] / df_chart['기간총합'] * 100).round(1)
+            df_chart['비중'] = (df_chart['검색량'] / df_chart.groupby('기간')['검색량'].transform('sum') * 100).round(1)
             
-            # 시각화
             fig = px.bar(
                 df_chart, x="검색량", y="기간", color="브랜드", 
                 orientation='h', barmode='stack',
                 text=df_chart.apply(lambda x: f"{x['검색량']:,} ({x['비중']}%)", axis=1),
-                title=f"[{time_unit}] {st.session_state.active_preset_name} 통합 점유율 추이",
-                height=600, color_discrete_sequence=px.colors.qualitative.Pastel
+                title=f"[{time_unit}] 통합 점유율 분석", height=600
             )
             fig.update_yaxes(categoryorder='category descending')
             st.plotly_chart(fig, use_container_width=True)
             
-            # 상세 데이터 테이블
-            with st.expander("📝 상세 키워드별 검색량 내역 (Raw Data)"):
-                df_pivot = df_res.pivot_table(index=["브랜드", "상세키워드"], columns="기간", values="검색량", aggfunc="sum")
-                st.dataframe(df_pivot, use_container_width=True)
-        else:
-            st.warning("데이터를 가져오지 못했습니다. API 키나 시트 설정을 확인해주세요.")
+            with st.expander("📝 상세 키워드별 내역"):
+                st.dataframe(df_res.pivot_table(index=["브랜드", "상세키워드"], columns="기간", values="검색량", aggfunc="sum"))
 else:
-    st.write("상단의 프리셋 버튼을 눌러 분석할 그룹을 선택해주세요.")
+    st.write("상단의 프리셋 버튼을 클릭하면 분석이 시작됩니다.")
